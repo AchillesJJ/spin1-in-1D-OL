@@ -1,4 +1,5 @@
 #!/bin/bash
+# hahahaah
 make clean
 make
 cd ..
