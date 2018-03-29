@@ -2,6 +2,7 @@
 #include "itensor/all.h"
 #include "observable.h"
 #include "initialize.h"
+#include "utility.h"
 #include <typeinfo>
 #include <iostream>
 #include <fstream>
@@ -23,68 +24,69 @@ int main(int argc, char* argv[])
   double U0 = 1.0;
   double U1 = -0.005;
   double q = 0.0;
+  double t1 = 0.0;
+  double t2 = 0.0;
   double t = 0.0;
   double mu = 0.0;
-  if (argc>0){
-    q = (double) atof(argv[1]);
-  }
-  else{
-    cout << "Qudratic Zeeman q is not set. " << endl;
-  }
+  double params[10];
+  int flag = 0;
+  IQMPS psi;
+  // read command-line arguments
+  q = (double) atof(argv[1]);
+  t1 = (double) atof(argv[2]);
+  t2 = (double) atof(argv[3]);
+  mu = (double) atof(argv[4]);
   
   // readme file 
   ofstream readme;
   readme.open("output/readme.txt");
   readme.close();
   readme.open("output/readme.txt", ofstream::app);
-  ofstream filling_num;
-  filling_num.open("output/filling_num.dat");
-  filling_num.close();
-  filling_num.open("output/filling_num.dat", ofstream::app);
   ofstream corl;
   corl.open("output/correlation.dat");
   corl.close();
   corl.open("output/correlation.dat", ofstream::app);
   
-  // loop over different hopping t
-  for (int cnt1 = 0; cnt1 <= 5; cnt1++){
-    for (int cnt2 = 1; cnt2 <= 20; cnt2++){
-      
-      // change parameters
-      mu = 0.1*cnt1;
-      t = 0.015*cnt2;
-      
-      auto sites = S1BH_NC(N);
-      auto ampo = AutoMPO(sites);
-      // hopping term
-      for (int i = 1; i < N; i++){
-        ampo += -t, "Bpdag", i, "Bp", i+1;
-        ampo += -t, "Bpdag", i+1, "Bp", i;
-        ampo += -t, "Bzdag", i, "Bz", i+1;
-        ampo += -t, "Bzdag", i+1, "Bz", i;
-        ampo += -t, "Bmdag", i, "Bm", i+1;
-        ampo += -t, "Bmdag", i+1, "Bm", i;
-      }
-      // on-site term
-      for (int i = 1; i <= N; i++){
-        // density-density interaction
-        ampo += U0/2, "Ntot", i, "Ntot", i;
-        ampo += -U0/2, "Ntot", i;
-        // spin-spin interaction
-        ampo += U1/2.0, "F+", i, "F-", i;
-        ampo += U1/2.0, "Fz", i, "Fz", i;
-        ampo += -U1/2.0, "Fz", i;
-        ampo += -U1, "Ntot", i;
-        // quafratic Zeeman term
-        ampo += q, "Np", i;
-        ampo += q, "Nm", i;
-        // chemical potential
-        ampo += -mu, "Ntot", i;
-      }
-      auto Hamil = IQMPO(ampo);
-      
+  linspace(t1, t2, 10, params);
+  
+  // loop on parameters: hooping t
+  for (auto x : params){
+  
+    // hopping strength
+    t = x; 
+    auto sites = S1BH_NC(N);
+    auto ampo = AutoMPO(sites);
+    // hopping term
+    for (int i = 1; i < N; i++){
+      ampo += -t, "Bpdag", i, "Bp", i+1;
+      ampo += -t, "Bpdag", i+1, "Bp", i;
+      ampo += -t, "Bzdag", i, "Bz", i+1;
+      ampo += -t, "Bzdag", i+1, "Bz", i;
+      ampo += -t, "Bmdag", i, "Bm", i+1;
+      ampo += -t, "Bmdag", i+1, "Bm", i;
+    }
+    // on-site term
+    for (int i = 1; i <= N; i++){
+      // density-density interaction
+      ampo += U0/2, "Ntot", i, "Ntot", i;
+      ampo += -U0/2, "Ntot", i;
+      // spin-spin interaction
+      ampo += U1/2.0, "F+", i, "F-", i;
+      ampo += U1/2.0, "Fz", i, "Fz", i;
+      ampo += -U1/2.0, "Fz", i;
+      ampo += -U1, "Ntot", i;
+      // quafratic Zeeman term
+      ampo += q, "Np", i;
+      ampo += q, "Nm", i;
+      // chemical potential
+      ampo += -mu, "Ntot", i;
+    }
+    auto Hamil = IQMPO(ampo);
+  
+    // the first point using full DMRG sweep procedure
+    if (flag == 0){
       // randomly initialize state with total Sz = 0
-      auto psi = IQMPS(sites);
+      psi = IQMPS(sites);
       for (int i = 1; i <= N; i++){
         auto s = sites(i);
         auto wf = IQTensor(s);
@@ -93,10 +95,7 @@ int main(int argc, char* argv[])
         wf.set(s(12), 1.0/sqrt(3.));
         psi.setA(i, wf);
       }
-      // auto psi = initialize(sites);
-      
-      cout << particle_num(psi, sites, "Nz") << endl;
-      
+  
       // Stage-1 : DMRG pre-sweep 
       auto sweeps = Sweeps(10);
       sweeps.maxm() = 10,20,30,40,50,60,70,80,90,100; 
@@ -104,32 +103,98 @@ int main(int argc, char* argv[])
       sweeps.niter() = 3;
       sweeps.noise() = 1E-8;
       // perform DMRG algorithm
-      auto energy = dmrg(psi,Hamil,sweeps,{"Quiet",true}); // ground state
+      auto energy = dmrg(psi,Hamil,sweeps,{"Quiet",true});
+  
+      // Stage-2 : DMRG sweep until convergence
+      auto en0_old = energy;
+      auto rtol = 100.0;
+      auto num_sweep = 0;
+      auto num_sweep_max = 100;
+  
+      do {
+        auto sweeps_new = Sweeps(1);
+        sweeps_new.cutoff() = 1E-7;
+        sweeps_new.niter() = 2;
+        if (num_sweep < 10){
+          sweeps_new.maxm() = 110+10*num_sweep;        
+          sweeps_new.noise() = 1E-10;     
+        }
+        else if (num_sweep >= 10 && num_sweep < 20){
+          sweeps_new.maxm() = 200;        
+          sweeps_new.noise() = 1E-10;     
+        }
+        else if (num_sweep >= 20 && num_sweep <30){
+          sweeps_new.maxm() = 300;
+          sweeps_new.noise() = 1E-12;
+        } 
+        else {
+          sweeps_new.maxm() = 400;
+          sweeps_new.noise() = 1E-12;
+        }  
+        // perform DMRG algorithm 
+        auto en0_new = dmrg(psi,Hamil,sweeps_new,{"Quiet",true});
+        num_sweep += 1;
+        rtol = abs((en0_old-en0_new)/en0_old);
+        println("relative error of energy = ", rtol);
+        println("extra step ", num_sweep);
+        en0_old = en0_new;
+      } while (rtol>1E-8); 
       
-      double total_num = 0.0;
-      total_num += particle_num(psi, sites, "Np");
-      total_num += particle_num(psi, sites, "Nz");
-      total_num += particle_num(psi, sites, "Nm");
-      filling_num << mu << " " << t << " " << total_num/N << " " 
-      << particle_num(psi, sites, "Np")/N << " "
-      << particle_num(psi, sites, "Nz")/N << " "
-      << particle_num(psi, sites, "Nm")/N << " " << endl;
+      flag += 1;
+    }
+    // other point use former wave function
+    else{
+      // Stage-1 : DMRG pre-sweep 
+      auto sweeps = Sweeps(1);
+      sweeps.maxm() = 400;
+      sweeps.cutoff() = 1E-7; 
+      sweeps.niter() = 2;
+      sweeps.noise() = 1E-12;
+      // perform DMRG algorithm
+      auto energy = dmrg(psi,Hamil,sweeps,{"Quiet",true});
+  
+      // Stage-2 : DMRG sweep until convergence
+      auto en0_old = energy;
+      auto rtol = 100.0;
+      auto num_sweep = 0;
+      auto num_sweep_max = 100;
+  
+      do {
+        auto sweeps_new = Sweeps(1);
+        sweeps_new.cutoff() = 1E-7;
+        sweeps_new.niter() = 2;
+        sweeps_new.maxm() = 400;
+        sweeps_new.noise() = 1E-12;  
+        // perform DMRG algorithm 
+        auto en0_new = dmrg(psi,Hamil,sweeps_new,{"Quiet",true});
+        num_sweep += 1;
+        rtol = abs((en0_old-en0_new)/en0_old);
+        println("relative error of energy = ", rtol);
+        println("extra step ", num_sweep);
+        en0_old = en0_new;
+      } while (rtol>1E-8);
       
-      corl << mu << " " << t << " "
-      << correlation(psi, sites, "Bpdag", "Bp", 10) << " "
-      << correlation(psi, sites, "Bzdag", "Bz", 10) << " "
-      << correlation(psi, sites, "Bmdag", "Bm", 10) << endl;
-      
-      readme << "cnt1 = " << cnt1 << ", " 
-      << "cnt2 = " << cnt2 << " is accomplished " << endl;  
-      
-    } // loop over hopping t
+      flag += 1;
+    }
     
-  }// loop over chemical potential mu
+    // save wave function
+    stringstream mid_site, mid_psi;
+    mid_site << "output/sites_" << flag;
+    mid_psi << "output/psi_" << flag;
+    writeToFile(mid_site.str(), sites);
+    writeToFile(mid_psi.str(), psi);
+    // output correlation
+    corl << x << " " 
+         << correlation(psi, sites, "Bpdag", "Bp", 10) << " "
+         << correlation(psi, sites, "Bzdag", "Bz", 10) << " "
+         << correlation(psi, sites, "Bmdag", "Bm", 10) << endl;
+  
+  }
+  
   
   // close readme 
   readme.close();
-  filling_num.close();
+  corl.close();
   
 } //end main
 
