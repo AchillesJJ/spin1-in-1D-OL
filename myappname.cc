@@ -30,7 +30,6 @@ int main(int argc, char* argv[])
   double mu = 0.0;
   double params[10];
   int flag = 0;
-  IQMPS psi;
   // read command-line arguments
   q = (double) atof(argv[1]);
   t1 = (double) atof(argv[2]);
@@ -46,6 +45,8 @@ int main(int argc, char* argv[])
   corl.open("output/correlation.dat");
   corl.close();
   corl.open("output/correlation.dat", ofstream::app);
+  readme << q << " " << t1 << " " << t2 << " " << mu << endl;
+  
   
   linspace(t1, t2, 10, params);
   
@@ -54,39 +55,42 @@ int main(int argc, char* argv[])
   
     // hopping strength
     t = x; 
-    auto sites = S1BH_NC(N);
-    auto ampo = AutoMPO(sites);
-    // hopping term
-    for (int i = 1; i < N; i++){
-      ampo += -t, "Bpdag", i, "Bp", i+1;
-      ampo += -t, "Bpdag", i+1, "Bp", i;
-      ampo += -t, "Bzdag", i, "Bz", i+1;
-      ampo += -t, "Bzdag", i+1, "Bz", i;
-      ampo += -t, "Bmdag", i, "Bm", i+1;
-      ampo += -t, "Bmdag", i+1, "Bm", i;
-    }
-    // on-site term
-    for (int i = 1; i <= N; i++){
-      // density-density interaction
-      ampo += U0/2, "Ntot", i, "Ntot", i;
-      ampo += -U0/2, "Ntot", i;
-      // spin-spin interaction
-      ampo += U1/2.0, "F+", i, "F-", i;
-      ampo += U1/2.0, "Fz", i, "Fz", i;
-      ampo += -U1/2.0, "Fz", i;
-      ampo += -U1, "Ntot", i;
-      // quafratic Zeeman term
-      ampo += q, "Np", i;
-      ampo += q, "Nm", i;
-      // chemical potential
-      ampo += -mu, "Ntot", i;
-    }
-    auto Hamil = IQMPO(ampo);
   
     // the first point using full DMRG sweep procedure
     if (flag == 0){
+      
+      // build Hamiltonian
+      auto sites = S1BH_NC(N);
+      auto ampo = AutoMPO(sites);
+      // hopping term
+      for (int i = 1; i < N; i++){
+        ampo += -t, "Bpdag", i, "Bp", i+1;
+        ampo += -t, "Bpdag", i+1, "Bp", i;
+        ampo += -t, "Bzdag", i, "Bz", i+1;
+        ampo += -t, "Bzdag", i+1, "Bz", i;
+        ampo += -t, "Bmdag", i, "Bm", i+1;
+        ampo += -t, "Bmdag", i+1, "Bm", i;
+      }
+      // on-site term
+      for (int i = 1; i <= N; i++){
+        // density-density interaction
+        ampo += U0/2, "Ntot", i, "Ntot", i;
+        ampo += -U0/2, "Ntot", i;
+        // spin-spin interaction
+        ampo += U1/2.0, "F+", i, "F-", i;
+        ampo += U1/2.0, "Fz", i, "Fz", i;
+        ampo += -U1/2.0, "Fz", i;
+        ampo += -U1, "Ntot", i;
+        // quafratic Zeeman term
+        ampo += q, "Np", i;
+        ampo += q, "Nm", i;
+        // chemical potential
+        ampo += -mu, "Ntot", i;
+      }
+      auto Hamil = IQMPO(ampo);
+      
       // randomly initialize state with total Sz = 0
-      psi = IQMPS(sites);
+      auto psi = IQMPS(sites);
       for (int i = 1; i <= N; i++){
         auto s = sites(i);
         auto wf = IQTensor(s);
@@ -110,7 +114,7 @@ int main(int argc, char* argv[])
       auto rtol = 100.0;
       auto num_sweep = 0;
       auto num_sweep_max = 100;
-  
+      
       do {
         auto sweeps_new = Sweeps(1);
         sweeps_new.cutoff() = 1E-7;
@@ -138,13 +142,61 @@ int main(int argc, char* argv[])
         println("relative error of energy = ", rtol);
         println("extra step ", num_sweep);
         en0_old = en0_new;
-      } while (rtol>1E-8); 
-      
+      } while (rtol>1E-7); 
+  
       flag += 1;
+      // save wave function
+      stringstream site_output, psi_output;
+      site_output << "output/sites_" << flag;
+      psi_output << "output/psi_" << flag;
+      writeToFile(site_output.str(), sites);
+      writeToFile(psi_output.str(), psi);
+      // output correlation
+      corl << x << " " 
+           << correlation(psi, sites, "Bpdag", "Bp", 10) << " "
+           << correlation(psi, sites, "Bzdag", "Bz", 10) << " "
+           << correlation(psi, sites, "Bmdag", "Bm", 10) << endl;
     }
     // other point use former wave function
     else{
-      // Stage-1 : DMRG pre-sweep 
+      
+      stringstream sites_path, psi_path;
+      sites_path << "./output/sites_" << flag;
+      psi_path << "./output/psi_" << flag;
+      // Stage-1 : DMRG pre-sweep
+      S1BH_NC sites;
+      readFromFile(sites_path.str(), sites);
+      IQMPS psi(sites);
+      readFromFile(psi_path.str(), psi);
+      // build Hamiltonian
+      auto ampo = AutoMPO(sites);
+      // hopping term
+      for (int i = 1; i < N; i++){
+        ampo += -t, "Bpdag", i, "Bp", i+1;
+        ampo += -t, "Bpdag", i+1, "Bp", i;
+        ampo += -t, "Bzdag", i, "Bz", i+1;
+        ampo += -t, "Bzdag", i+1, "Bz", i;
+        ampo += -t, "Bmdag", i, "Bm", i+1;
+        ampo += -t, "Bmdag", i+1, "Bm", i;
+      }
+      // on-site term
+      for (int i = 1; i <= N; i++){
+        // density-density interaction
+        ampo += U0/2, "Ntot", i, "Ntot", i;
+        ampo += -U0/2, "Ntot", i;
+        // spin-spin interaction
+        ampo += U1/2.0, "F+", i, "F-", i;
+        ampo += U1/2.0, "Fz", i, "Fz", i;
+        ampo += -U1/2.0, "Fz", i;
+        ampo += -U1, "Ntot", i;
+        // quafratic Zeeman term
+        ampo += q, "Np", i;
+        ampo += q, "Nm", i;
+        // chemical potential
+        ampo += -mu, "Ntot", i;
+      }
+      auto Hamil = IQMPO(ampo);
+       
       auto sweeps = Sweeps(1);
       sweeps.maxm() = 400;
       sweeps.cutoff() = 1E-7; 
@@ -152,13 +204,12 @@ int main(int argc, char* argv[])
       sweeps.noise() = 1E-12;
       // perform DMRG algorithm
       auto energy = dmrg(psi,Hamil,sweeps,{"Quiet",true});
-  
       // Stage-2 : DMRG sweep until convergence
       auto en0_old = energy;
       auto rtol = 100.0;
       auto num_sweep = 0;
       auto num_sweep_max = 100;
-  
+      
       do {
         auto sweeps_new = Sweeps(1);
         sweeps_new.cutoff() = 1E-7;
@@ -172,22 +223,21 @@ int main(int argc, char* argv[])
         println("relative error of energy = ", rtol);
         println("extra step ", num_sweep);
         en0_old = en0_new;
-      } while (rtol>1E-8);
+      } while (rtol>1E-7);
       
       flag += 1;
+      // save wave function
+      stringstream site_output, psi_output;
+      site_output << "output/sites_" << flag;
+      psi_output << "output/psi_" << flag;
+      writeToFile(site_output.str(), sites);
+      writeToFile(psi_output.str(), psi);
+      // output correlation
+      corl << x << " " 
+           << correlation(psi, sites, "Bpdag", "Bp", 10) << " "
+           << correlation(psi, sites, "Bzdag", "Bz", 10) << " "
+           << correlation(psi, sites, "Bmdag", "Bm", 10) << endl;
     }
-    
-    // save wave function
-    stringstream mid_site, mid_psi;
-    mid_site << "output/sites_" << flag;
-    mid_psi << "output/psi_" << flag;
-    writeToFile(mid_site.str(), sites);
-    writeToFile(mid_psi.str(), psi);
-    // output correlation
-    corl << x << " " 
-         << correlation(psi, sites, "Bpdag", "Bp", 10) << " "
-         << correlation(psi, sites, "Bzdag", "Bz", 10) << " "
-         << correlation(psi, sites, "Bmdag", "Bm", 10) << endl;
   
   }
   
